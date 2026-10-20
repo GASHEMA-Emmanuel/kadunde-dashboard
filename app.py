@@ -599,7 +599,28 @@ def chat_bubble():
         top.markdown("**Kadunde assistant**" + ("" if ai else " · <small>simple mode</small>"), unsafe_allow_html=True)
         if hist and top.button("Clear", type="tertiary"):
             st.session_state.chat = hist = []
-        box = st.container(height=420, autoscroll=True, border=False)
+        size = top.segmented_control("Window size", ["Small", "Half", "Full"], default="Small", required=True,
+                                     key="kd_chat_size", label_visibility="collapsed",
+                                     format_func={"Small": ":material/chat_bubble: Small", "Half": ":material/side_navigation: Half",
+                                                  "Full": ":material/fullscreen: Full"}.get)
+        # Message area height: what's left after the header and the input box (the header wraps to two lines on a phone)
+        css = ""
+        if size == "Small":
+            box_h, box_h_phone = "min(420px, 70vh - 210px)", "min(420px, 70vh - 210px)"
+        else:
+            box_h, box_h_phone = "100vh - 300px", "100vh - 350px"
+            # Half = a panel down the right side of the screen, Full = the whole screen (both the same on a phone).
+            # Both stop above the "Ask the league" button so it stays visible for closing the window.
+            left = "auto" if size == "Half" else "16px"
+            width = "max(50vw, min(440px, calc(100vw - 32px)))" if size == "Half" else "auto"
+            css = (f'div[data-testid="stPopoverBody"] {{transform:none !important; top:16px !important; right:16px !important; '
+                   f'bottom:116px !important; left:{left} !important; width:{width} !important; height:auto !important; '
+                   f'max-width:none !important; max-height:none !important;}}')
+        css += (f"div:has(> .st-key-kd-chatbox) {{flex:0 0 calc({box_h}) !important; height:calc({box_h}) !important;}}"
+                f"@media (max-width: 640px) {{div:has(> .st-key-kd-chatbox) {{flex-basis:calc({box_h_phone}) !important; "
+                f"height:calc({box_h_phone}) !important;}}}}")
+        st.html(f"<style>{css}</style>")   # style-only st.html takes up no space in the window
+        box = st.container(height=420, autoscroll=True, border=False, key="kd-chatbox")
         q = st.chat_input("Ask about the league...", key="kd_chat_q")
         with box:
             chat_messages(c, ai, hist, q)
