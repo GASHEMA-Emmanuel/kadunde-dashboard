@@ -84,9 +84,12 @@ def ask_gemini(question, history, c):
     body = {"system_instruction": {"parts": [{"text": SYSTEM.format(league=S.LEAGUE_NAME, data=league_text(c))}]},
             "contents": contents}
     problems = []
-    for model in S.CHAT_MODELS:   # each model has its own free daily limit, so try the next one if one is used up
+    for model, level in S.CHAT_MODELS.items():   # each model has its own free daily limit, so try the next one if one is used up
         try:
-            r = requests.post(GEMINI_URL.format(model), json=body, headers={"x-goog-api-key": key}, timeout=40)
+            post = lambda b: requests.post(GEMINI_URL.format(model), json=b, headers={"x-goog-api-key": key}, timeout=30)
+            r = post({**body, "generationConfig": {"thinkingConfig": {"thinkingLevel": level}}})
+            if r.status_code == 400 and "think" in r.text.lower():   # model doesn't accept that thinking level
+                r = post(body)
             if r.status_code != 200:
                 try:
                     msg = r.json()["error"]["message"]
@@ -171,6 +174,25 @@ def simple_answer(question, c):
     # --- greetings / help
     if re.fullmatch(r"\s*(hi|hello|hey|muraho|mwiriwe|mwaramutse|bite|help|\?)\W*\s*", q):
         return HELP
+
+    # --- whole-league summary
+    if not who and has("summary", "summarise", "summarize", "overview", "recap", "update", "incamake", "how is the league"):
+        sec = c["order"][1]
+        lg = LV if c["winners"][LV - 1] else L
+        hi = max(((m, g, P(m, g)) for m in idx for g in range(1, LV + 1) if P(m, g) is not None), key=lambda x: x[2], default=None)
+        mw = max(c["wins"]) if c["wins"] else 0
+        hs = max(idx, key=lambda m: c["hit_tot"][m])
+        d = c["D"]
+        zone = ", ".join(f"{nick(m)} ({M[m]['total']})" for m in c["order"][:4])
+        return (f"**{S.LEAGUE_NAME}** after GW{LV}" + (" *(live)*" if live else "") + f" - {L} of 38 gameweeks finished.\n\n"
+                + f"- 🏆 **{nick(leader)}** leads with {M[leader]['total']} pts, {M[leader]['total'] - M[sec]['total']} ahead of {nick(sec)}\n"
+                + f"- 💰 Prize zone: {zone}\n"
+                + (f"- 📅 GW{lg} winner: **{', '.join(nick(m) for m in c['winners'][lg - 1])}** with {c['top'][lg - 1]} pts{tag(lg)}\n" if lg else "")
+                + (f"- 🔥 Season high: {nick(hi[0])} with {hi[2]} in GW{hi[1]}\n" if hi else "")
+                + (f"- 🥇 Most GW wins: {', '.join(nick(m) for m in idx if c['wins'][m] == mw)} ({mw:g})\n" if mw else "")
+                + (f"- ✂️ Most hits: {nick(hs)} (-{c['hit_tot'][hs]})\n" if c["hit_tot"][hs] else "")
+                + f"- ⬇️ Bottom: {nick(c['order'][-1])} with {M[c['order'][-1]]['total']} pts\n"
+                + (f"- ⏰ Next deadline: GW{d['next_gw']} at {d['deadline'].replace('T', ' ').replace('Z', '')} UTC" if d["deadline"] else ""))
 
     # --- questions about specific managers
     if len(who) >= 2 and not gws:
@@ -269,7 +291,7 @@ def simple_answer(question, c):
 
 
 HELP = ("I can answer questions like:\n\n"
-        "- *Who is leading?* · *Full table* · *Who is last?*\n"
+        "- *League summary* · *Who is leading?* · *Full table* · *Who is last?*\n"
         "- *All GW winners* · *Winners GW1 to GW5* · *Who has the most GW wins?*\n"
         "- *GW3 scores* · *Live scores* · *Biggest movers*\n"
         "- *How is Axel doing?* · *Philly GW3* · *Axel vs Pacifique*\n"

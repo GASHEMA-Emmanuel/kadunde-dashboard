@@ -44,4 +44,5 @@ REFRESH_SECONDS = 120
 
 # Chatbot ("Ask" page). Uses Google Gemini's free tier - put the key in Streamlit secrets as GEMINI_API_KEY.
 # Each model has its own free daily limit: if one is used up the next is tried, then the simple built-in bot answers.
-CHAT_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+# Model -> how much it "thinks" before answering (minimal / low / medium / high). Less thinking = faster answers.
+CHAT_MODELS = {"gemini-3.6-flash": "minimal", "gemini-3.8-flash": "low", "gemini-3.5-flash-lite": "minimal"}
