@@ -19,13 +19,12 @@ def _pmap(fn, items, workers=10):
         return list(ex.map(fn, items))
 
 
-def live_scores(gw, bs, entries):
+def live_scores(gw, bs, entries, fixtures):
     """Live points for a gameweek in progress: provisional bonus + auto-subs + vice-captain.
     Same method LiveFPL uses; official FPL only adds these after matches are confirmed."""
     pos = {p["id"]: p["element_type"] for p in bs["elements"]}
     team = {p["id"]: p["team"] for p in bs["elements"]}
     live = {e["id"]: e["stats"] for e in get(f"event/{gw}/live/")["elements"]}
-    fixtures = get(f"fixtures/?event={gw}")
 
     prov, tstat = {}, {}
     for f in fixtures:
@@ -131,9 +130,14 @@ def load_league(league_id):
     cur = next((e for e in events if e["is_current"]), None)
     nxt = next((e for e in events if e["is_next"]), None)
     live_ok = False
+    cur_done = bool(cur["finished"]) if cur else True
     if cur and not cur["finished"]:
+        # FPL only marks a gameweek finished after its final processing, often a day after the last match.
+        # Treat it as finished as soon as every match has ended with bonus points confirmed.
         try:
-            lv = live_scores(cur["id"], bs, [m["entry"] for m in managers])
+            fixtures = get(f"fixtures/?event={cur['id']}")
+            cur_done = bool(fixtures) and all(f["finished"] for f in fixtures)
+            lv = live_scores(cur["id"], bs, [m["entry"] for m in managers], fixtures)
             g = cur["id"] - 1
             for m in managers:
                 l = lv.get(m["entry"])
@@ -149,9 +153,9 @@ def load_league(league_id):
 
     return {
         "managers": managers,
-        "finished": [bool(e["finished"]) for e in events],
+        "finished": [bool(e["finished"]) or (cur_done and e["id"] == cur["id"]) for e in events],
         "current_gw": cur["id"] if cur else 0,
-        "current_finished": bool(cur["finished"]) if cur else True,
+        "current_finished": cur_done,
         "next_gw": nxt["id"] if nxt else None,
         "deadline": nxt["deadline_time"] if nxt else None,
         "live_calc": live_ok,
