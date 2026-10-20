@@ -37,7 +37,7 @@ CLASSIC_PRIZES = [120_000, 90_000, 75_000, 50_000]  # 1st, 2nd, 3rd, 4th
 POT_TOTAL = 1_000_000                               # 20 x 50,000
 
 # Gameweek prizes already paid out - add the GW number when you pay, e.g. [1, 2, 3]
-PAID_GAMEWEEKS = [1,2]
+PAID_GAMEWEEKS = []
 
 # How often the page reloads data from FPL (seconds)
 REFRESH_SECONDS = 120
