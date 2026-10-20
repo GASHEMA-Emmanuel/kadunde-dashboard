@@ -157,7 +157,7 @@ div[data-testid="stPageLink"] p {{font-weight:700; color:{INK};}}
 [data-testid="stChatMessage"] {{background:{CARD}; border:1px solid {LINE}; border-radius:14px; padding:12px 14px;}}
 [data-testid="stChatMessage"] p, [data-testid="stChatMessage"] li {{color:{INK};}}
 [data-testid="stChatInput"] {{background:{CARD2}; border:1px solid {LINE}; border-radius:14px;}}
-.st-key-kd-bubble {{position:fixed; right:22px; bottom:calc(22px + env(safe-area-inset-bottom, 0px)); z-index:1000; width:auto !important;}}
+.st-key-kd-bubble {{position:fixed; right:22px; bottom:calc(60px + env(safe-area-inset-bottom, 0px)); z-index:1000; width:auto !important;}}
 .st-key-kd-bubble button {{border-radius:999px; padding:10px 18px; border:none; color:#06101f;
   background:linear-gradient(135deg,{CYAN},{GREEN}); box-shadow:0 8px 24px {tint(CYAN, .35)}; font-weight:700;}}
 .st-key-kd-bubble button p {{color:#06101f; font-weight:700;}}
