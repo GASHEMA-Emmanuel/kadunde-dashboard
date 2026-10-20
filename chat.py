@@ -8,13 +8,15 @@ import streamlit as st
 import settings as S
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent"
+FALLBACK_NOTE = "<small>"   # start of the note added under answers from the simple bot (kept out of the AI's history)
 
 
 def api_key():
     try:
-        return st.secrets.get("GEMINI_API_KEY")
+        k = st.secrets.get("GEMINI_API_KEY")
     except Exception:  # no secrets file at all
         return None
+    return str(k).strip().strip('"').strip() or None if k else None
 
 
 def fmt(n):
@@ -61,94 +63,214 @@ def league_text(c):
 
 SYSTEM = """You are the friendly assistant of the {league} fantasy football (FPL) league dashboard.
 Answer questions using ONLY the league data below. If the answer is not in the data, say you don't know.
-Keep answers short (a few sentences or a small list). Call managers by their nickname. Money is in RWF.
-Reply in the same language as the question (for example English, Kinyarwanda or French).
+Keep answers short (a few sentences, a small list or a small markdown table). Call managers by their nickname.
+Money is in RWF. Reply in the same language as the question (for example English, Kinyarwanda or French).
 Light banter about the league is fine, but stay kind.
 
 {data}"""
 
 
 def ask_gemini(question, history, c):
-    """Returns the answer text, or None if Gemini can't be used right now (no key, limit reached, error)."""
+    """Returns (answer, problem). answer is None if Gemini couldn't answer; problem then says why."""
     key = api_key()
     if not key:
-        return None
-    contents = [{"role": "user" if r == "user" else "model", "parts": [{"text": t}]} for r, t in history[-8:]]
+        return None, "no GEMINI_API_KEY secret"
+    contents = []
+    for r, t in history[-8:]:
+        if r == "assistant" and FALLBACK_NOTE in t:   # don't feed the simple bot's notes back to the AI
+            t = t.split(FALLBACK_NOTE)[0].strip()
+        contents.append({"role": "user" if r == "user" else "model", "parts": [{"text": t}]})
     contents.append({"role": "user", "parts": [{"text": question}]})
     body = {"system_instruction": {"parts": [{"text": SYSTEM.format(league=S.LEAGUE_NAME, data=league_text(c))}]},
             "contents": contents}
+    problems = []
     for model in S.CHAT_MODELS:   # each model has its own free daily limit, so try the next one if one is used up
         try:
             r = requests.post(GEMINI_URL.format(model), json=body, headers={"x-goog-api-key": key}, timeout=40)
             if r.status_code != 200:
+                try:
+                    msg = r.json()["error"]["message"]
+                except Exception:
+                    msg = r.text[:200]
+                problems.append(f"{model}: {r.status_code} {msg.split('. ')[0][:160]}")
                 continue
             parts = r.json()["candidates"][0]["content"]["parts"]
-            text = "".join(p.get("text", "") for p in parts).strip()
+            text = "".join(p.get("text", "") for p in parts if not p.get("thought")).strip()
             if text:
-                return text
-        except Exception:
-            continue
-    return None
+                return text, None
+            problems.append(f"{model}: empty answer")
+        except Exception as e:
+            problems.append(f"{model}: {type(e).__name__}")
+    return None, "; ".join(problems).replace(key, "***")
 
 
 # ---------------------------------------------------------------- simple built-in bot (no AI, always free)
 def find_managers(q, c):
+    """Managers named in the question - nicknames first, FPL names only if no nickname matches."""
     M = c["M"]
-    found = []
-    for m in c["order"]:
-        words = {M[m]["nick"].lower()} | {w.lower() for w in M[m]["fpl"].split() if len(w) > 2}
-        if any(re.search(rf"\b{re.escape(w)}\b", q) for w in words):
-            found.append(m)
-    return found
+    hit = lambda words: any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", q) for w in words)
+    by_nick = [m for m in c["order"] if hit([M[m]["nick"].lower()])]
+    if by_nick:
+        return sorted(by_nick, key=lambda m: q.find(M[m]["nick"].lower()))
+    return [m for m in c["order"] if hit([w.lower() for w in M[m]["fpl"].split() if len(w) > 2])]
+
+
+def find_gws(q, c):
+    """Gameweeks in the question: 'gw5', 'gameweek 5', 'gw1-gw7', 'gw 1 to 7', 'this week', 'last week'."""
+    LV, L = c["LV"], c["L"]
+    gw = r"(?:gw|gameweek|game week|week)\s*"
+    m = re.search(rf"{gw}(\d{{1,2}})\s*(?:-|–|to|until|till)\s*(?:{gw})?(\d{{1,2}})", q)
+    if m:
+        a, b = sorted((int(m.group(1)), int(m.group(2))))
+        return [g for g in range(a, b + 1) if 1 <= g <= 38]
+    gs = [int(x) for x in re.findall(rf"{gw}(\d{{1,2}})", q) if 1 <= int(x) <= 38]
+    if gs:
+        return gs
+    if re.search(r"\b(this|current|live) (gw|gameweek|week)\b", q):
+        return [LV]
+    if re.search(r"\b(last|previous) (gw|gameweek|week)\b", q):
+        return [L]
+    return []
 
 
 def simple_answer(question, c):
-    q = question.lower()
-    M, P, L, LV, live = c["M"], c["P"], c["L"], c["LV"], c["live"]
+    q = " " + question.lower().strip() + " "
+    M, P, H, L, LV, live, idx = c["M"], c["P"], c["H"], c["L"], c["LV"], c["live"], c["idx"]
     nick = lambda m: M[m]["nick"]
-    who = find_managers(q, c)
-    gw = re.search(r"\b(?:gw|gameweek|game week)\s*(\d{1,2})\b", q)
-    gw = int(gw.group(1)) if gw and 1 <= int(gw.group(1)) <= 38 else None
     has = lambda *ws: any(w in q for w in ws)
+    who, gws = find_managers(q, c), find_gws(q, c)
+    tag = lambda g: " *(live)*" if live and g == LV else ""
+    played = lambda m: [(g, P(m, g)) for g in range(1, LV + 1) if P(m, g) is not None]
+    leader = c["order"][0]
 
-    if gw and who:
-        lines = [f"**{nick(m)}** scored **{P(m, gw)}** pts in GW{gw}" if P(m, gw) is not None else f"{nick(m)} has no score for GW{gw} yet"
-                 for m in who]
-        return "\n\n".join(lines)
-    if gw or has("won", "winner", "win ") and has("gw", "gameweek", "week"):
-        g = gw or LV
-        w = c["winners"][g - 1] if g else []
-        if not w:
-            return f"GW{g} has no scores yet."
-        tag = " (live, can still change)" if live and g == LV else ""
-        return f"GW{g} winner{'s' if len(w) > 1 else ''}: **{', '.join(nick(m) for m in w)}** with {c['top'][g - 1]} pts{tag}."
-    if who and has("prize", "money", "rwf", "earn", "won"):
+    def summary(m):
+        done = [x for x in played(m) if c["fin"][x[0] - 1]]
+        best = max(done, key=lambda x: x[1]) if done else None
+        worst = min(done, key=lambda x: x[1]) if done else None
+        gap = M[leader]["total"] - M[m]["total"]
+        form = ", ".join(f"{p}" for _, p in played(m)[-5:])
+        return (f"**{nick(m)}** ({M[m]['team']}) is **#{M[m]['rank']}** with **{M[m]['total']} pts**"
+                + (f", {gap} behind {nick(leader)}." if gap else ", top of the league! 🏆") + "\n\n"
+                + f"- Last 5 GWs: {form or '-'}\n"
+                + (f"- Best GW: {best[1]} (GW{best[0]}) · Worst GW: {worst[1]} (GW{worst[0]})\n" if best else "")
+                + f"- GW wins: {c['wins'][m]:g} · Hits: -{c['hit_tot'][m]} pts\n"
+                + f"- Chips: {', '.join(c['chip_pts'][m]['used']) or 'none yet'}\n"
+                + f"- Prize money now: {fmt(c['earn'][m])} RWF")
+
+    def winners_list(gs):
+        rows = []
+        for g in gs:
+            w = c["winners"][g - 1]
+            if not w or c["top"][g - 1] is None:
+                rows.append(f"| GW{g} | not played yet | | |")
+                continue
+            state = "live" if live and g == LV else ("paid" if g in S.PAID_GAMEWEEKS else "unpaid")
+            rows.append(f"| GW{g} | **{', '.join(nick(m) for m in w)}** | {c['top'][g - 1]} | {state} |")
+        return "| GW | Winner | Pts | Prize |\n|---|---|---|---|\n" + "\n".join(rows)
+
+    # --- greetings / help
+    if re.fullmatch(r"\s*(hi|hello|hey|muraho|mwiriwe|mwaramutse|bite|help|\?)\W*\s*", q):
+        return HELP
+
+    # --- questions about specific managers
+    if len(who) >= 2 and not gws:
+        rows = "\n".join(f"| **{nick(m)}** | #{M[m]['rank']} | {M[m]['total']} | {c['wins'][m]:g} | -{c['hit_tot'][m]} | {fmt(c['earn'][m])} |"
+                         for m in who)
+        a, b = who[0], who[1]
+        d = M[a]["total"] - M[b]["total"]
+        lead = f"**{nick(a)}** leads **{nick(b)}** by {d} pts." if d > 0 else (
+            f"**{nick(b)}** leads **{nick(a)}** by {-d} pts." if d < 0 else f"{nick(a)} and {nick(b)} are level on points.")
+        return lead + "\n\n| Manager | Rank | Pts | GW wins | Hits | Prize (RWF) |\n|---|---|---|---|---|---|\n" + rows
+    if who and gws:
+        return "\n\n".join(f"**{nick(m)}**: " + ", ".join(
+            f"GW{g} **{P(m, g)}**" + (f" (-{H(m, g)} hit)" if H(m, g) else "") + tag(g) if P(m, g) is not None else f"GW{g} -"
+            for g in gws) for m in who)
+    if who and has("prize", "money", "rwf", "earn", "how much", "amafaranga"):
         return "\n\n".join(f"**{nick(m)}** would have **{fmt(c['earn'][m])} RWF** if the season ended today "
-                           f"({c['wins'][m]:g} GW win(s))." for m in who)
+                           f"({c['wins'][m]:g} GW win(s) + {fmt(c['classic'](m))} RWF classic prize)." for m in who)
     if who and has("chip"):
-        return "\n\n".join(f"**{nick(m)}** chips: {', '.join(c['chip_pts'][m]['used']) or 'none played yet'}." for m in who)
+        return "\n\n".join(f"**{nick(m)}** chips: {', '.join(c['chip_pts'][m]['used']) or 'none played yet'} "
+                           f"({c['chip_pts'][m]['total']} pts from BB/FH/TC)." for m in who)
     if who and has("hit", "kwikatisha"):
         return "\n\n".join(f"**{nick(m)}** has lost **{c['hit_tot'][m]}** pts to hits." for m in who)
+    if who and has("best", "highest", "top score"):
+        return "\n\n".join(f"**{nick(m)}**'s best GW: **{b[1]}** in GW{b[0]}" for m in who
+                           for b in [max(played(m), key=lambda x: x[1])] if played(m))
+    if who and has("worst", "lowest"):
+        return "\n\n".join(f"**{nick(m)}**'s worst GW: **{b[1]}** in GW{b[0]}" for m in who
+                           for b in [min(played(m), key=lambda x: x[1])] if played(m))
     if who:
-        return "\n\n".join(f"**{nick(m)}** ({M[m]['team']}) is **#{M[m]['rank']}** with **{M[m]['total']}** pts, "
-                           f"{c['wins'][m]:g} GW win(s), {fmt(c['earn'][m])} RWF in prizes so far." for m in who)
+        return "\n\n---\n\n".join(summary(m) for m in who)
+
+    # --- gameweek winners
+    if re.search(r"\b(winners?|won|wins?)\b|yatsinze|yatwaye", q):
+        if has("most", "many", "count", "how many"):
+            ws = sorted([m for m in idx if c["wins"][m]], key=lambda m: -c["wins"][m])
+            return "Gameweek wins so far:\n\n" + "\n".join(f"- **{nick(m)}**: {c['wins'][m]:g}" for m in ws) if ws else "No gameweek finished yet."
+        return winners_list(gws or list(range(1, LV + 1)))
+
+    # --- one or more gameweeks: top scorers
+    if gws:
+        out = []
+        for g in gws:
+            sc = sorted([m for m in idx if P(m, g) is not None], key=lambda m: -P(m, g))
+            if not sc:
+                out.append(f"GW{g} hasn't been played yet.")
+                continue
+            out.append(f"**GW{g}**{tag(g)} - average {c['avg'][g - 1]}\n\n" + "\n".join(
+                f"{i + 1}. {nick(m)} - {P(m, g)}" + (f" (-{H(m, g)})" if H(m, g) else "") for i, m in enumerate(sc[:10] if len(gws) == 1 else sc[:3])))
+        return "\n\n".join(out)
+
+    # --- league-wide questions
+    if has("highest", "season high", "best score", "best gw", "record"):
+        b = max(((m, g, P(m, g)) for m in idx for g in range(1, LV + 1) if P(m, g) is not None), key=lambda x: x[2], default=None)
+        return f"Season-high score: **{nick(b[0])}** with **{b[2]}** pts in GW{b[1]}." if b else "No scores yet."
+    if has("lowest", "worst score", "worst gw"):
+        b = min(((m, g, P(m, g)) for m in idx for g in range(1, L + 1) if P(m, g) is not None), key=lambda x: x[2], default=None)
+        return f"Lowest score so far: **{nick(b[0])}** with **{b[2]}** pts in GW{b[1]}." if b else "No finished gameweeks yet."
+    if has("last place", "bottom", "worst manager", "uwanyuma", " last "):
+        return "Bottom of the table:\n\n" + "\n".join(f"{M[m]['rank']}. {nick(m)} - {M[m]['total']} pts" for m in c["order"][-3:])
+    if has("climb", "rise", "riser", "mover", "moved", "fall", "drop", "fell"):
+        mv = sorted(idx, key=lambda m: c["r_now"][m] - c["r_prev"][m])
+        up = [m for m in mv if c["r_prev"][m] > c["r_now"][m]][:3]
+        down = [m for m in mv[::-1] if c["r_prev"][m] < c["r_now"][m]][:3]
+        return (f"Movers in GW{LV}:\n\n"
+                + "".join(f"- ▲ **{nick(m)}** up {c['r_prev'][m] - c['r_now'][m]} to #{c['r_now'][m]}\n" for m in up)
+                + "".join(f"- ▼ **{nick(m)}** down {c['r_now'][m] - c['r_prev'][m]} to #{c['r_now'][m]}\n" for m in down)) if up or down else "No changes in the table this gameweek."
+    if has("average", "avg"):
+        return "League average per gameweek:\n\n" + "\n".join(f"- GW{g}{tag(g)}: {c['avg'][g - 1]}" for g in range(1, LV + 1) if c["avg"][g - 1] is not None)
+    if has("live", "right now", "today", "this week", "current"):
+        g = LV
+        sc = sorted([m for m in idx if P(m, g) is not None], key=lambda m: -P(m, g))
+        return f"**GW{g}**{tag(g)} scores:\n\n" + "\n".join(f"{i + 1}. {nick(m)} - {P(m, g)}" for i, m in enumerate(sc[:10]))
     if has("hit", "kwikatisha"):
-        hs = sorted(c["idx"], key=lambda m: -c["hit_tot"][m])[:5]
-        return "Most points lost to hits:\n\n" + "\n".join(f"- {nick(m)}: -{c['hit_tot'][m]}" for m in hs if c["hit_tot"][m]) \
-            if c["hit_tot"][hs[0]] else "Nobody has taken a hit yet."
+        hs = sorted(idx, key=lambda m: -c["hit_tot"][m])
+        clean = [nick(m) for m in idx if not c["hit_tot"][m]]
+        return ("Most points lost to hits:\n\n" + "\n".join(f"- {nick(m)}: -{c['hit_tot'][m]}" for m in hs[:5] if c["hit_tot"][m])
+                + (f"\n\nNo hits yet: {', '.join(clean)}" if clean else "")) if c["hit_tot"][hs[0]] else "Nobody has taken a hit yet."
     if has("chip"):
-        cs = sorted(c["idx"], key=lambda m: -c["chip_pts"][m]["total"])[:5]
+        cs = sorted(idx, key=lambda m: -c["chip_pts"][m]["total"])[:5]
         return "Best chips (Bench Boost + Free Hit + Triple Captain points):\n\n" + "\n".join(
             f"- {nick(m)}: {c['chip_pts'][m]['total']} pts" for m in cs)
-    if has("prize", "money", "rwf", "pot"):
-        es = sorted(c["idx"], key=lambda m: -c["earn"][m])[:5]
-        return f"Pot: {fmt(S.POT_TOTAL)} RWF. Prize money if the season ended today:\n\n" + "\n".join(
-            f"- {nick(m)}: {fmt(c['earn'][m])} RWF" for m in es if c["earn"][m])
+    if has("prize", "money", "rwf", "pot", "amafaranga"):
+        es = sorted(idx, key=lambda m: -c["earn"][m])
+        return (f"Pot: {fmt(S.POT_TOTAL)} RWF · {fmt(S.GW_PRIZE)} RWF per gameweek · top 4 at the end: "
+                f"{', '.join(fmt(p) for p in S.CLASSIC_PRIZES)} RWF.\n\nPrize money if the season ended today:\n\n"
+                + "\n".join(f"- {nick(m)}: {fmt(c['earn'][m])} RWF" for m in es if c["earn"][m]))
     if has("deadline"):
         d = c["D"]
         return f"Next deadline: GW{d['next_gw']} at {d['deadline'].replace('T', ' ').replace('Z', '')} UTC." if d["deadline"] else "No upcoming deadline."
-    if has("standing", "table", "ranking", "top", "lead", "first", "1st", "winning"):
-        return "Current standings:\n\n" + "\n".join(f"{M[m]['rank']}. {nick(m)} - {M[m]['total']} pts" for m in c["order"][:10])
-    return ("I'm the simple bot, so I only understand a few kinds of questions. Try:\n\n"
-            "- *Who is leading?*\n- *Who won GW5?*\n- *How is Axel doing?*\n- *Philly GW3*\n"
-            "- *Who took the most hits?*\n- *Best chips*\n- *Prize money*\n- *Next deadline*")
+    if has("standing", "table", "ranking", "rank", "top", "lead", "first", "1st", "winning", "uyoboye", "amanota", "points"):
+        n = 20 if has("all", "full", "whole") else 10
+        return "Current standings:\n\n" + "\n".join(
+            f"{M[m]['rank']}. **{nick(m)}** - {M[m]['total']} pts" + (f" ({M[leader]['total'] - M[m]['total']} behind)" if m != leader else "")
+            for m in c["order"][:n]) + ("" if n == 20 else "\n\n*Ask for the \"full table\" to see everyone.*")
+    return "Sorry, I didn't get that. " + HELP
+
+
+HELP = ("I can answer questions like:\n\n"
+        "- *Who is leading?* · *Full table* · *Who is last?*\n"
+        "- *All GW winners* · *Winners GW1 to GW5* · *Who has the most GW wins?*\n"
+        "- *GW3 scores* · *Live scores* · *Biggest movers*\n"
+        "- *How is Axel doing?* · *Philly GW3* · *Axel vs Pacifique*\n"
+        "- *Most hits* · *Best chips* · *Prize money* · *Next deadline*")

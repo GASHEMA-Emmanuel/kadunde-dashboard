@@ -575,26 +575,24 @@ def chat_page(c):
     page_head("Ask the league", "Ask anything about standings, gameweeks, prizes, hits or chips"
               + ("" if ai else " · simple mode: add a GEMINI_API_KEY secret for the AI assistant"))
     hist = st.session_state.setdefault("chat", [])
-    if not hist:
-        with st.chat_message("assistant"):
-            st.markdown("Muraho! Ask me things like *Who is leading?*, *Who won GW3?* or *How is Axel doing?*")
+    q = st.chat_input("Ask about the league...")   # outside a fragment this sits pinned at the bottom of the page
+    if hist and st.button("Clear chat"):
+        st.session_state.chat = hist = []
+    with st.chat_message("assistant"):
+        st.markdown("Muraho! 👋 " + chat.HELP)
     for role, text in hist:
         with st.chat_message(role):
             st.markdown(text, unsafe_allow_html=role == "assistant")
-    if hist and st.button("Clear chat"):
-        st.session_state.chat = []
-        st.rerun()
-    q = st.chat_input("Ask about the league...")
     if q:
         with st.chat_message("user"):
             st.markdown(q)
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                a = chat.ask_gemini(q, hist, c) if ai else None
+                a, why = chat.ask_gemini(q, hist, c) if ai else (None, None)
                 if a is None:
                     a = chat.simple_answer(q, c)
                     if ai:
-                        a += "\n\n<small>(The AI assistant is busy or out of free questions for today, so the simple bot answered.)</small>"
+                        a += f"\n\n{chat.FALLBACK_NOTE}(The AI assistant couldn't answer, so the simple bot did. Reason: {esc(why)})</small>"
             st.markdown(a, unsafe_allow_html=True)
         hist += [("user", q), ("assistant", a)]
 
@@ -602,8 +600,6 @@ def chat_page(c):
 # ---------------------------------------------------------------- navigation
 def make_page(fn, refresh=True):
     def run():
-        # the chat page doesn't auto-refresh, so a reload never interrupts someone typing or waiting for an answer
-        @st.fragment(run_every=S.REFRESH_SECONDS if refresh else None)
         def body():
             try:
                 c = build_ctx()
@@ -613,7 +609,8 @@ def make_page(fn, refresh=True):
             header(c)
             fn(c)
             footer(c)
-        body()
+        # the chat page doesn't auto-refresh, so a reload never interrupts someone typing or waiting for an answer
+        (st.fragment(body, run_every=S.REFRESH_SECONDS) if refresh else body)()
     run.__name__ = fn.__name__
     return run
 
