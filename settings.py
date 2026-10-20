@@ -13,7 +13,7 @@ NICKNAMES = {
     336495: "Arsene",      # Arsene Zimana
     5143386: "Fidele",      # Rwangalinde Fidele
     68270: "Rutambi",     # Rutambi .
-    5026211: "Alex",        # Ganza Axel
+    5026211: "Axel",        # Ganza Axel
     5347788: "Pacifique",   # Basha Pacific
     1948256: "Philly",      # Philly Mugisha
     806071: "Tresor",      # Jean tresor Yvan
@@ -41,3 +41,7 @@ PAID_GAMEWEEKS = []
 
 # How often the page reloads data from FPL (seconds)
 REFRESH_SECONDS = 120
+
+# Chatbot ("Ask" page). Uses Google Gemini's free tier - put the key in Streamlit secrets as GEMINI_API_KEY.
+# Each model has its own free daily limit: if one is used up the next is tried, then the simple built-in bot answers.
+CHAT_MODELS = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]

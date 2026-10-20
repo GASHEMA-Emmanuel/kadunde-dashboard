@@ -6,6 +6,7 @@ import textwrap
 import plotly.graph_objects as go
 import streamlit as st
 
+import chat
 import settings as S
 from fpl import load_league
 
@@ -153,6 +154,11 @@ div[data-testid="stPageLink"] a:hover {{border-color:{CYAN};}}
 div[data-testid="stPageLink"] p {{font-weight:700; color:{INK};}}
 .kd-pagetitle {{font-size:22px; font-weight:800; color:{INK}; margin:2px 0 2px}}
 .kd-pagesub {{color:{MUTE}; font-size:13px; margin-bottom:12px}}
+[data-testid="stChatMessage"] {{background:{CARD}; border:1px solid {LINE}; border-radius:14px; padding:12px 14px;}}
+[data-testid="stChatMessage"] p, [data-testid="stChatMessage"] li {{color:{INK};}}
+[data-testid="stBottom"] > div, [data-testid="stBottomBlockContainer"] {{background:{BG};}}
+[data-testid="stChatInput"] {{background:{CARD2}; border:1px solid {LINE}; border-radius:14px;}}
+[data-testid="stChatInput"] textarea {{color:{INK}; caret-color:{INK};}}
 </style>""", unsafe_allow_html=True)
 
 
@@ -564,10 +570,40 @@ def managers_page(c):
             plot(fig2, 240)
 
 
+def chat_page(c):
+    ai = bool(chat.api_key())
+    page_head("Ask the league", "Ask anything about standings, gameweeks, prizes, hits or chips"
+              + ("" if ai else " · simple mode: add a GEMINI_API_KEY secret for the AI assistant"))
+    hist = st.session_state.setdefault("chat", [])
+    if not hist:
+        with st.chat_message("assistant"):
+            st.markdown("Muraho! Ask me things like *Who is leading?*, *Who won GW3?* or *How is Axel doing?*")
+    for role, text in hist:
+        with st.chat_message(role):
+            st.markdown(text, unsafe_allow_html=role == "assistant")
+    if hist and st.button("Clear chat"):
+        st.session_state.chat = []
+        st.rerun()
+    q = st.chat_input("Ask about the league...")
+    if q:
+        with st.chat_message("user"):
+            st.markdown(q)
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                a = chat.ask_gemini(q, hist, c) if ai else None
+                if a is None:
+                    a = chat.simple_answer(q, c)
+                    if ai:
+                        a += "\n\n<small>(The AI assistant is busy or out of free questions for today, so the simple bot answered.)</small>"
+            st.markdown(a, unsafe_allow_html=True)
+        hist += [("user", q), ("assistant", a)]
+
+
 # ---------------------------------------------------------------- navigation
-def make_page(fn):
+def make_page(fn, refresh=True):
     def run():
-        @st.fragment(run_every=S.REFRESH_SECONDS)
+        # the chat page doesn't auto-refresh, so a reload never interrupts someone typing or waiting for an answer
+        @st.fragment(run_every=S.REFRESH_SECONDS if refresh else None)
         def body():
             try:
                 c = build_ctx()
@@ -589,5 +625,6 @@ PAGES = {
     "prizes": st.Page(make_page(prizes_page), title="Prizes", icon="💰", url_path="prizes"),
     "awards": st.Page(make_page(awards_page), title="Awards", icon="🎖️", url_path="awards"),
     "managers": st.Page(make_page(managers_page), title="Managers", icon="👤", url_path="managers"),
+    "chat": st.Page(make_page(chat_page, refresh=False), title="Ask", icon="💬", url_path="ask"),
 }
 st.navigation(list(PAGES.values()), position="top").run()
