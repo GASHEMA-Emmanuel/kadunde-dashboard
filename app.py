@@ -156,8 +156,23 @@ div[data-testid="stPageLink"] p {{font-weight:700; color:{INK};}}
 .kd-pagesub {{color:{MUTE}; font-size:13px; margin-bottom:12px}}
 [data-testid="stChatMessage"] {{background:{CARD}; border:1px solid {LINE}; border-radius:14px; padding:12px 14px;}}
 [data-testid="stChatMessage"] p, [data-testid="stChatMessage"] li {{color:{INK};}}
-[data-testid="stBottom"] > div, [data-testid="stBottomBlockContainer"] {{background:{BG};}}
 [data-testid="stChatInput"] {{background:{CARD2}; border:1px solid {LINE}; border-radius:14px;}}
+.st-key-kd-bubble {{position:fixed; right:22px; bottom:calc(22px + env(safe-area-inset-bottom, 0px)); z-index:1000; width:auto !important;}}
+.st-key-kd-bubble button {{border-radius:999px; padding:10px 18px; border:none; color:#06101f;
+  background:linear-gradient(135deg,{CYAN},{GREEN}); box-shadow:0 8px 24px {tint(CYAN, .35)}; font-weight:700;}}
+.st-key-kd-bubble button p {{color:#06101f; font-weight:700;}}
+.st-key-kd-bubble button:hover {{filter:brightness(1.08);}}
+div[data-testid="stPopoverBody"] {{width:min(440px, calc(100vw - 32px)); max-width:none; background:{CARD};
+  border:1px solid {LINE}; border-radius:16px;}}
+div[data-testid="stPopoverBody"] [data-testid="stChatMessage"] {{padding:8px 10px;}}
+div[data-testid="stPopoverBody"] [data-testid="stChatMessage"] p, div[data-testid="stPopoverBody"] li {{font-size:13.5px;}}
+div[data-testid="stPopoverBody"] table {{display:block; overflow-x:auto; font-size:12px; margin:4px 0;}}
+div[data-testid="stPopoverBody"] th, div[data-testid="stPopoverBody"] td {{padding:4px 8px; white-space:nowrap; color:{INK};}}
+div[data-testid="stPopoverBody"] th {{color:{MUTE}; font-weight:700;}}
+div[data-testid="stPopoverBody"] p, div[data-testid="stPopoverBody"] small {{color:{INK};}}
+div[data-testid="stPopoverBody"] button p {{color:{MUTE};}}
+[data-testid="stChatInput"] > div, [data-testid="stChatInput"] textarea {{background:{CARD2} !important;}}
+[data-testid="stChatInput"] textarea::placeholder {{color:{FAINT};}}
 [data-testid="stChatInput"] textarea {{color:{INK}; caret-color:{INK};}}
 </style>""", unsafe_allow_html=True)
 
@@ -570,14 +585,27 @@ def managers_page(c):
             plot(fig2, 240)
 
 
-def chat_page(c):
+def chat_bubble():
+    """Chat window that opens from a floating button in the bottom-right corner of every page.
+    The conversation is kept in the session, so it carries on when moving between pages."""
+    try:
+        c = build_ctx()
+    except Exception:
+        return
     ai = bool(chat.api_key())
-    page_head("Ask the league", "Ask anything about standings, gameweeks, prizes, hits or chips"
-              + ("" if ai else " · simple mode: add a GEMINI_API_KEY secret for the AI assistant"))
     hist = st.session_state.setdefault("chat", [])
-    q = st.chat_input("Ask about the league...")   # outside a fragment this sits pinned at the bottom of the page
-    if hist and st.button("Clear chat"):
-        st.session_state.chat = hist = []
+    with st.container(key="kd-bubble"), st.popover("Ask the league", icon="💬", key="kd_chat"):
+        top = st.container(horizontal=True, vertical_alignment="center")
+        top.markdown("**Kadunde assistant**" + ("" if ai else " · <small>simple mode</small>"), unsafe_allow_html=True)
+        if hist and top.button("Clear", type="tertiary"):
+            st.session_state.chat = hist = []
+        box = st.container(height=420, autoscroll=True, border=False)
+        q = st.chat_input("Ask about the league...", key="kd_chat_q")
+        with box:
+            chat_messages(c, ai, hist, q)
+
+
+def chat_messages(c, ai, hist, q):
     with st.chat_message("assistant"):
         st.markdown("Muraho! 👋 " + chat.HELP)
     for role, text in hist:
@@ -598,8 +626,9 @@ def chat_page(c):
 
 
 # ---------------------------------------------------------------- navigation
-def make_page(fn, refresh=True):
+def make_page(fn):
     def run():
+        @st.fragment(run_every=S.REFRESH_SECONDS)
         def body():
             try:
                 c = build_ctx()
@@ -609,8 +638,8 @@ def make_page(fn, refresh=True):
             header(c)
             fn(c)
             footer(c)
-        # the chat page doesn't auto-refresh, so a reload never interrupts someone typing or waiting for an answer
-        (st.fragment(body, run_every=S.REFRESH_SECONDS) if refresh else body)()
+        body()
+        chat_bubble()   # outside the auto-refreshing part, so a refresh never interrupts a chat
     run.__name__ = fn.__name__
     return run
 
@@ -622,6 +651,5 @@ PAGES = {
     "prizes": st.Page(make_page(prizes_page), title="Prizes", icon="💰", url_path="prizes"),
     "awards": st.Page(make_page(awards_page), title="Awards", icon="🎖️", url_path="awards"),
     "managers": st.Page(make_page(managers_page), title="Managers", icon="👤", url_path="managers"),
-    "chat": st.Page(make_page(chat_page, refresh=False), title="Ask", icon="💬", url_path="ask"),
 }
 st.navigation(list(PAGES.values()), position="top").run()

@@ -174,7 +174,7 @@ def simple_answer(question, c):
 
     # --- questions about specific managers
     if len(who) >= 2 and not gws:
-        rows = "\n".join(f"| **{nick(m)}** | #{M[m]['rank']} | {M[m]['total']} | {c['wins'][m]:g} | -{c['hit_tot'][m]} | {fmt(c['earn'][m])} |"
+        rows = "\n".join(f"| **{nick(m)}** | #{M[m]['rank']} | {M[m]['total']} | {c['wins'][m]:g} | {-c['hit_tot'][m]} | {fmt(c['earn'][m])} |"
                          for m in who)
         a, b = who[0], who[1]
         d = M[a]["total"] - M[b]["total"]
